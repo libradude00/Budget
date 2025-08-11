@@ -1,332 +1,64 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8" />
-  <title>Budgeting App — Auto-Audit Suggestions</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background:#f7f8fb; color:#222; }
-    h1 { text-align:center }
-    .controls { display:flex; gap:12px; align-items:center; justify-content:center; margin-bottom:8px; }
-    table { width:100%; border-collapse:collapse; margin-top:12px; }
-    th, td { border:1px solid #ddd; padding:8px; text-align:center; }
-    th { background:#2b6cb0; color:white; }
-    input[type="text"], input[type="number"] { width:100%; box-sizing:border-box; padding:6px; }
-    button { padding:8px 12px; }
-    #chart-wrap { width:420px; margin:20px auto; }
-    .leftover { font-weight:700; text-align:center; margin-top:8px; }
-    .over { color:red; }
-    .positive { color:green; }
-    #suggestions { margin-top:16px; padding:12px; border-radius:6px; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
-    .suggestion { padding:8px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; gap:12px; }
-    .suggestion:last-child{ border-bottom:none; }
-    .flag { font-size:0.9rem; color:#666; }
-    .suggestion .amount { font-weight:700; }
-    .highlight { background:#fff3f3; }
-    .note { font-size:0.9rem; color:#444; margin-top:8px; }
-    .combo { background:#f0f9ff; padding:8px; border-radius:6px; margin-top:8px; }
-    footer { margin-top:18px; font-size:0.85rem; color:#555; text-align:center; }
-    .btn-small { padding:6px 8px; font-size:0.9rem; }
-  </style>
+    <meta charset="UTF-8">
+    <title>Book Library - Access</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Budgeting App — Auto-Audit Suggestions</h1>
+    <div class="center-box">
+        <h1>Welcome to My Book Library</h1>
+        <p>Enter access code to continue:</p>
+        <input type="password" id="accessCode" placeholder="Access Code">
+        <button id="enterBtn">Access</button>
+        <p id="error" class="error"></p>
+    </div>
 
-  <div class="controls">
-    <label>Monthly Income: $ <input id="income" type="number" value="0" min="0" /></label>
-    <button id="addRowBtn">Add Category</button>
-  </div>
+    <script>
+        // Fallback list (edit codes.json in the same folder to manage codes without changing this file)
+        let allowedCodesFallback = ["EHunnewell", "NRobinson", "JMeadows", "KOrchard", "COrchard", "MGarcia", "AdminA", "AWilliams"];
 
-  <table>
-    <thead>
-      <tr><th>Category</th><th>Amount ($)</th><th>Action</th></tr>
-    </thead>
-    <tbody id="budgetBody"></tbody>
-    <tfoot>
-      <tr><td style="font-weight:700">Total</td><td id="tableTotal">$0.00</td><td></td></tr>
-    </tfoot>
-  </table>
+        // allowedCodes will be populated from codes.json if available, otherwise use fallback
+        let allowedCodes = allowedCodesFallback.slice();
 
-  <div id="chart-wrap"><canvas id="budgetChart" width="400" height="400"></canvas></div>
+        async function loadCodes() {
+            try {
+                const resp = await fetch('codes.json', {cache: 'no-store'});
+                if (!resp.ok) throw new Error('No codes.json found');
+                const data = await resp.json();
+                if (Array.isArray(data.codes)) {
+                    allowedCodes = data.codes;
+                    console.log('Loaded codes.json,', allowedCodes.length, 'codes');
+                } else {
+                    console.warn('codes.json is not in expected format. Using fallback codes.');
+                }
+            } catch (e) {
+                console.log('Using fallback codes:', e.message);
+            }
+        }
 
-  <div class="leftover" id="leftoverDisplay">Leftover: $0.00</div>
+        function checkCode() {
+            const code = document.getElementById('accessCode').value;
+            if (!code) {
+                document.getElementById('error').textContent = "Please enter a code.";
+                return;
+            }
 
-  <div id="suggestions" style="display:none">
-    <h3>Suggested unnecessary expenses to consider cutting</h3>
-    <div id="suggestionList"></div>
-    <div class="note">
-      Suggestions are based on keyword heuristics and general personal-finance best-practices. Auto-audit shows smallest combination of items to remove that would get you under budget (when found).
-    </div>
-  </div>
+            // simple exact-match check; adjust to .toLowerCase() if you want case-insensitive matching
+            if (allowedCodes.includes(code)) {
+                window.location.href = "budget.html";
+            } else {
+                document.getElementById('error').textContent = "Incorrect code. Try again.";
+            }
+        }
 
-  <footer>
-    Research basis: subscription creep, discretionary spending (meals, entertainment, conveniences) and small recurring fees are common savings targets.
-  </footer>
+        document.getElementById('enterBtn').addEventListener('click', checkCode);
+        document.getElementById('accessCode').addEventListener('keyup', (e) => {
+            if (e.key === 'Enter') checkCode();
+        });
 
-<script>
-/* ---------- App state ---------- */
-let expenses = []; // {name, amount, color}
-const budgetBody = document.getElementById('budgetBody');
-const incomeInput = document.getElementById('income');
-const tableTotal = document.getElementById('tableTotal');
-const leftoverDisplay = document.getElementById('leftoverDisplay');
-const suggestionsPanel = document.getElementById('suggestions');
-const suggestionList = document.getElementById('suggestionList');
-const addRowBtn = document.getElementById('addRowBtn');
-
-/* ---------- Keywords and short reasons ---------- */
-const unnecessaryKeywords = {
-  'subscription': 'Recurring subscription — many people forget unused subscriptions.',
-  'stream': 'Streaming services can add up — audit unused plans.',
-  'membership': 'Memberships (gym/club) often go unused — consider freezing or canceling.',
-  'coffee': 'Daily premium coffee is a frequent discretionary expense.',
-  'takeout': 'Food delivery and takeout add up quickly.',
-  'delivery': 'Delivery fees and convenience charges add to costs.',
-  'dining': 'Dining out tends to be discretionary and cuttable.',
-  'cable': 'Cable packages are often unnecessary after streaming.',
-  'magazine': 'Print subscriptions and extras can be eliminated.',
-  'app': 'Paid apps and in-app subscriptions repeat charges.',
-  'premium': 'Premium plan upgrades are often discretionary.',
-  'warranty': 'Extended warranties are often poor value for many items.',
-  'bank': 'Bank fees / late fees are avoidable costs to cut.',
-  'fee': 'Small recurring fees (bank, service) add up quickly.',
-  'smokes': 'Tobacco is both a health and budget hit.',
-  'alcohol': 'Alcohol spending is a discretionary category to trim.'
-};
-
-/* ---------- Chart setup ---------- */
-const ctx = document.getElementById('budgetChart').getContext('2d');
-const chart = new Chart(ctx, { type:'pie', data:{labels:[], datasets:[{data:[], backgroundColor:[]}]}, options:{responsive:true, plugins:{legend:{position:'bottom'}}} });
-
-/* ---------- Helpers ---------- */
-function randColor(){ return '#'+Math.floor(Math.random()*16777215).toString(16).padStart(6,'0'); }
-function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function sumExpenses(){ return expenses.reduce((s,e)=> s + (Number(e.amount)||0),0); }
-
-/* ---------- Row management ---------- */
-function addRow(name='', amount=0){
-  const idx = expenses.length;
-  const color = randColor();
-  expenses.push({name, amount: Number(amount)||0, color});
-  renderTable();
-  updateAll();
-}
-function removeRow(i){ expenses.splice(i,1); renderTable(); updateAll(); }
-function renderTable(){
-  budgetBody.innerHTML = '';
-  expenses.forEach((e,i)=>{
-    const tr = document.createElement('tr');
-    tr.dataset.index = i;
-    tr.innerHTML = `
-      <td><input type="text" class="catName" value="${escapeHtml(e.name)}" /></td>
-      <td><input type="number" class="catAmt" value="${Number(e.amount)}" min="0" /></td>
-      <td><button class="delBtn btn-small">Delete</button></td>
-    `;
-    budgetBody.appendChild(tr);
-    tr.querySelector('.catName').addEventListener('input', (ev)=>{ expenses[i].name = ev.target.value; updateAll(); });
-    tr.querySelector('.catAmt').addEventListener('input', (ev)=>{ expenses[i].amount = Number(ev.target.value)||0; updateAll(); });
-    tr.querySelector('.delBtn').addEventListener('click', ()=> removeRow(i));
-  });
-}
-
-/* ---------- Suggestion detection ---------- */
-function detectCandidates(){
-  const candidates = [];
-  for(let i=0;i<expenses.length;i++){
-    const name = (expenses[i].name||'').toLowerCase();
-    for(const kw in unnecessaryKeywords){
-      if(name.includes(kw)){
-        candidates.push({index:i, name:expenses[i].name||'(unnamed)', amount: Number(expenses[i].amount)||0, reason:unnecessaryKeywords[kw], matched:kw});
-        break;
-      }
-    }
-  }
-  return candidates;
-}
-
-/* ---------- Auto-audit: find minimal combination to cover deficit ---------- */
-/* We convert amounts to cents (integers), run DP to find minimal sum >= deficit with tie-breaker on count.
-   For safety, if n > 28 we fallback to greedy largest-first (performance tradeoff). */
-
-function findMinimalCombination(deficit, items){
-  // deficit and items amounts are in dollars. convert to cents
-  const cents = items.map(a=> Math.round(a*100));
-  const target = Math.round(deficit*100);
-  const n = cents.length;
-  if(target <= 0) return {found:false, indices:[], sum:0};
-
-  if(n === 0) return {found:false, indices:[], sum:0};
-
-  if(n > 28){
-    // fallback: greedy largest-first until cover
-    const idxs = items.map((v,i)=>({i,v})).sort((a,b)=>b.v-a.v);
-    let total = 0; let chosen=[];
-    for(const it of idxs){
-      if(total>=target) break;
-      total += Math.round(it.v*100);
-      chosen.push(it.i);
-    }
-    return {found: total>=target, indices: chosen, sum: total/100};
-  }
-
-  // DP: map sum -> bitmask (use object keyed by sum)
-  let dp = new Map(); // sumCents -> bitmask (as integer)
-  dp.set(0, 0);
-  for(let i=0;i<n;i++){
-    const v = cents[i];
-    const entries = Array.from(dp.entries());
-    for(const [s,mask] of entries){
-      const ns = s + v;
-      if(!dp.has(ns)){
-        dp.set(ns, mask | (1<<i));
-      }
-    }
-  }
-  // find minimal sum >= target
-  let bestSum = Infinity;
-  let bestMask = null;
-  for(const [s,mask] of dp.entries()){
-    if(s >= target){
-      if(s < bestSum) { bestSum = s; bestMask = mask; }
-      else if(s === bestSum){
-        // tie-breaker: prefer fewer items
-        const currCount = popcount(mask);
-        const bestCount = popcount(bestMask);
-        if(currCount < bestCount) bestMask = mask;
-      }
-    }
-  }
-  if(bestMask === null) return {found:false, indices:[], sum:0};
-  // extract indices
-  const indices = [];
-  for(let i=0;i<n;i++) if(bestMask & (1<<i)) indices.push(i);
-  return {found:true, indices, sum: bestSum/100};
-}
-function popcount(x){ let c=0; while(x){ c+= x & 1; x >>=1; } return c; }
-
-/* ---------- Compute suggestions and combos ---------- */
-function computeSuggestions(income){
-  const total = sumExpenses();
-  const leftover = income - total;
-  const candidates = detectCandidates();
-  // fallback: top 3 largest not already in candidates
-  const sortedByAmount = expenses.map((e,i)=>({index:i, name:e.name||'(unnamed)', amount:Number(e.amount)||0})).sort((a,b)=>b.amount-a.amount);
-  const fallback = [];
-  for(const it of sortedByAmount){
-    if(it.amount<=0) continue;
-    if(!candidates.some(c=>c.index===it.index)){
-      fallback.push({index:it.index, name:it.name, amount:it.amount, reason:'Large expense — consider reducing or renegotiating.'});
-    }
-    if(fallback.length>=3) break;
-  }
-  const allCandidates = candidates.concat(fallback);
-  // compute whether removing single candidate fixes budget
-  const deficit = income - total; // negative if over budget
-  const deficitAbs = -deficit; // amount needed to fix if over budget
-  // compute auto-audit combo among all expense items (we can restrict to candidates to reduce search)
-  const items = expenses.map(e=>Number(e.amount)||0);
-  const combo = findMinimalCombination(deficitAbs, items);
-  return {leftover, total, income, candidates: allCandidates, combo};
-}
-
-/* ---------- Render suggestions ---------- */
-function renderSuggestions(s){
-  suggestionList.innerHTML = '';
-  suggestionsPanel.style.display = 'block';
-  if(s.candidates.length===0){
-    suggestionList.innerHTML = `<div>No obvious candidates detected. Consider auditing subscriptions, delivery and dining, and small recurring fees.</div>`;
-  } else {
-    // display candidates
-    s.candidates.forEach(c=>{
-      const div = document.createElement('div');
-      div.className = 'suggestion';
-      div.innerHTML = `
-        <div>
-          <div style="font-weight:700">${escapeHtml(c.name)}</div>
-          <div class="flag">${c.reason || ''} ${c.matched ? '(matched: '+c.matched+')' : ''}</div>
-        </div>
-        <div style="text-align:right">
-          <div class="amount">$${Number(c.amount).toFixed(2)}</div>
-        </div>
-      `;
-      suggestionList.appendChild(div);
-    });
-  }
-  // show combo if found
-  if(s.combo && s.combo.found){
-    const comboDiv = document.createElement('div');
-    comboDiv.className = 'combo';
-    const names = s.combo.indices.map(i=>`${escapeHtml(expenses[i].name||'(unnamed)')} ($${Number(expenses[i].amount).toFixed(2)})`);
-    comboDiv.innerHTML = `<strong>Auto-audit suggestion:</strong> Remove the smallest combination of items that reaches the needed ${'$'+(Math.abs(s.leftover)).toFixed(2)} deficit:<br><br>${names.join(', ')}<br><em>Total savings: $${Number(s.combo.sum).toFixed(2)}</em>`;
-    suggestionList.appendChild(comboDiv);
-  } else {
-    const noCombo = document.createElement('div');
-    noCombo.className = 'note';
-    noCombo.textContent = 'Auto-audit could not find a compact combination (or items too many). Consider removing largest discretionary items first.';
-    suggestionList.appendChild(noCombo);
-  }
-}
-
-/* ---------- Update UI ---------- */
-function updateAll(){
-  const income = Number(incomeInput.value)||0;
-  const total = sumExpenses();
-  const leftover = income - total;
-  tableTotal.textContent = `$${total.toFixed(2)}`;
-  leftoverDisplay.textContent = `Leftover: $${leftover.toFixed(2)}`;
-  leftoverDisplay.className = 'leftover ' + (leftover < 0 ? 'over':'positive');
-
-  // prepare chart
-  const labels = [];
-  const data = [];
-  const colors = [];
-  expenses.forEach(e=>{
-    if(e.name && Number(e.amount)>0){
-      labels.push(e.name);
-      data.push(Number(e.amount));
-      colors.push(e.color);
-    }
-  });
-  if(income > 0){
-    if(leftover >= 0){
-      labels.push('Unbudgeted');
-      data.push(leftover);
-      colors.push('#cccccc');
-    } else {
-      labels.push('Over Budget');
-      data.push(Math.abs(leftover));
-      colors.push('#ff4d4d');
-    }
-  }
-  chart.data.labels = labels;
-  chart.data.datasets[0].data = data;
-  chart.data.datasets[0].backgroundColor = colors;
-  chart.update();
-
-  // suggestions when over budget
-  if(leftover < 0){
-    const s = computeSuggestions(income);
-    renderSuggestions(s);
-  } else {
-    suggestionsPanel.style.display = 'none';
-  }
-}
-
-/* ---------- Wiring ---------- */
-addRowBtn.addEventListener('click', ()=> addRow('New Category', 0));
-incomeInput.addEventListener('input', updateAll);
-
-/* seed rows */
-addRow('Rent', 1200);
-addRow('Streaming subscription', 19.99);
-addRow('Coffee shop', 120);
-addRow('Groceries', 350);
-
-/* initial render */
-renderTable();
-updateAll();
-
-</script>
+        // load codes.json on startup (non-blocking)
+        loadCodes();
+    </script>
 </body>
 </html>
